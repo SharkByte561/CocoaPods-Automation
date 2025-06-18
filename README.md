@@ -230,7 +230,7 @@ This automation package is provided under the MIT License. You're free to use, m
 
 ## 🙏 Acknowledgments
 
-- **Chocolatey Community**: Package management standards
+- **Chocolatey**: steviecoaster !!
 - **GitHub Actions**: Automation platform
 - **PowerShell Team**: Scripting foundation
 - **Open Source Community**: Inspiration and best practices
