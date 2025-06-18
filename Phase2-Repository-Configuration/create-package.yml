@@ -1,0 +1,176 @@
+name: Create Chocolatey Package from Issue
+
+on:
+  issues:
+    types: [opened, labeled]
+
+jobs:
+  create-package:
+    if: contains(github.event.issue.labels.*.name, 'package-request')
+    runs-on: [self-hosted, windows, chocolatey]
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Parse Issue Content
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body;
+            
+            // Extract package details using regex patterns
+            const nameMatch = body.match(/### Package Name\s*\n\s*(.+)/i);
+            const versionMatch = body.match(/### Version\s*\n\s*(.+)/i);
+            const urlMatch = body.match(/### Download URL\s*\n\s*(.+)/i);
+            const descriptionMatch = body.match(/### Description\s*\n\s*([\s\S]*?)(?=\n###|\n\n|$)/i);
+            const installerMatch = body.match(/### Installer Type\s*\n\s*(.+)/i);
+            const silentArgsMatch = body.match(/### Silent Install Arguments\s*\n\s*(.+)/i);
+            
+            const packageName = nameMatch ? nameMatch[1].trim() : '';
+            const version = versionMatch ? versionMatch[1].trim() : '';
+            const downloadUrl = urlMatch ? urlMatch[1].trim() : '';
+            const description = descriptionMatch ? descriptionMatch[1].trim() : '';
+            const installerType = installerMatch ? installerMatch[1].trim() : 'EXE (Silent install)';
+            const silentArgs = silentArgsMatch ? silentArgsMatch[1].trim() : '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-';
+            
+            console.log('Parsed data:', { packageName, version, downloadUrl, description, installerType, silentArgs });
+            
+            core.setOutput('package-name', packageName);
+            core.setOutput('version', version);
+            core.setOutput('download-url', downloadUrl);
+            core.setOutput('description', description);
+            core.setOutput('installer-type', installerType);
+            core.setOutput('silent-args', silentArgs);
+            
+            return { packageName, version, downloadUrl, description, installerType, silentArgs };
+      
+      - name: Validate Package Data
+        shell: pwsh
+        run: |
+          $packageName = "${{ steps.parse.outputs.package-name }}"
+          $version = "${{ steps.parse.outputs.version }}"
+          $downloadUrl = "${{ steps.parse.outputs.download-url }}"
+          
+          if ([string]::IsNullOrWhiteSpace($packageName)) {
+            throw "Package name cannot be empty"
+          }
+          
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Version cannot be empty"
+          }
+          
+          if ([string]::IsNullOrWhiteSpace($downloadUrl)) {
+            throw "Download URL cannot be empty"
+          }
+          
+          # Validate URL accessibility
+          try {
+            $response = Invoke-WebRequest -Uri $downloadUrl -Method Head -UseBasicParsing
+            Write-Output "✅ Download URL is accessible (Status: $($response.StatusCode))"
+          }
+          catch {
+            throw "❌ Download URL is not accessible: $_"
+          }
+      
+      - name: Generate Chocolatey Package
+        shell: pwsh
+        run: |
+          # Load package creation functions
+          . .\scripts\New-ChocolateyPackage.ps1
+          
+          $packageParams = @{
+            PackageName = "${{ steps.parse.outputs.package-name }}"
+            Version = "${{ steps.parse.outputs.version }}"
+            DownloadUrl = "${{ steps.parse.outputs.download-url }}"
+            Description = "${{ steps.parse.outputs.description }}"
+            InstallerType = "${{ steps.parse.outputs.installer-type }}"
+            SilentArgs = "${{ steps.parse.outputs.silent-args }}"
+            IssueNumber = ${{ github.event.issue.number }}
+          }
+          
+          $result = New-ChocolateyPackageFromIssue @packageParams
+          if (-not $result) {
+            throw "Package creation failed"
+          }
+      
+      - name: Test Package Installation
+        shell: pwsh
+        run: |
+          # Test package in isolated environment
+          . .\scripts\Test-PackageInstallation.ps1
+          $testResult = Test-ChocolateyPackage -PackageName "${{ steps.parse.outputs.package-name }}"
+          if (-not $testResult) {
+            throw "Package testing failed"
+          }
+      
+      - name: Upload Package Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chocolatey-package-${{ steps.parse.outputs.package-name }}
+          path: packages/${{ steps.parse.outputs.package-name }}*.nupkg
+          retention-days: 30
+      
+      - name: Deploy Package (Optional)
+        if: success() && github.event.issue.user.login == 'SharkByte561'
+        shell: pwsh
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          # Deploy to Chocolatey repository
+          . .\scripts\Deploy-Package.ps1
+          Deploy-ChocolateyPackage -PackageName "${{ steps.parse.outputs.package-name }}"
+      
+      - name: Update Issue with Results
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const status = '${{ job.status }}' === 'success' ? 'Success' : 'Failed';
+            const packageName = '${{ steps.parse.outputs.package-name }}';
+            const version = '${{ steps.parse.outputs.version }}';
+            
+            let comment = `## 📦 Package Creation ${status}\n\n`;
+            comment += `**Package Name:** ${packageName}\n`;
+            comment += `**Version:** ${version}\n`;
+            comment += `**Status:** ${status}\n`;
+            comment += `**Build URL:** ${context.payload.repository.html_url}/actions/runs/${context.runId}\n\n`;
+            
+            if (status === 'Success') {
+              comment += `### ✅ Package Created Successfully\n`;
+              comment += `**Installation:** \`choco install ${packageName}\`\n`;
+              comment += `**Package URL:** https://chocolatey.org/packages/${packageName}\n\n`;
+              comment += `### 📁 Artifacts\n`;
+              comment += `The package files have been uploaded as artifacts and are available for download.\n`;
+            } else {
+              comment += `### ❌ Package Creation Failed\n`;
+              comment += `Please check the [workflow logs](${context.payload.repository.html_url}/actions/runs/${context.runId}) for details.\n`;
+            }
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+            
+            // Add appropriate labels
+            if (status === 'Success') {
+              await github.rest.issues.addLabels({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ['package-created']
+              });
+            } else {
+              await github.rest.issues.addLabels({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ['package-failed']
+              });
+            }

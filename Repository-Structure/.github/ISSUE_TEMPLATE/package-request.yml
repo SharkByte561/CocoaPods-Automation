@@ -1,0 +1,62 @@
+name: Chocolatey Package Request
+description: Request creation of a new Chocolatey package
+title: "[PACKAGE] "
+labels: ["package-request"]
+assignees: ["SharkByte561"]
+body:
+  - type: input
+    id: package-name
+    attributes:
+      label: Package Name
+      description: Name of the software package (no spaces, lowercase preferred)
+      placeholder: ex. notepadplusplus
+    validations:
+      required: true
+  
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Software version to package
+      placeholder: ex. 1.0.0
+    validations:
+      required: true
+  
+  - type: input
+    id: download-url
+    attributes:
+      label: Download URL
+      description: Direct download link to the installer (.exe, .msi)
+      placeholder: ex. https://example.com/installer.exe
+    validations:
+      required: true
+  
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Brief description of the software
+      placeholder: Describe what this software does...
+    validations:
+      required: true
+  
+  - type: dropdown
+    id: installer-type
+    attributes:
+      label: Installer Type
+      description: What type of installer is this?
+      options:
+        - EXE (Silent install)
+        - MSI (Windows Installer)
+        - ZIP (Portable)
+    validations:
+      required: true
+  
+  - type: input
+    id: silent-args
+    attributes:
+      label: Silent Install Arguments
+      description: Command line arguments for silent installation
+      placeholder: ex. /S /silent /VERYSILENT
+    validations:
+      required: false
